@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # ===== PostgreSQL =====
+  postgres:
+    image: postgres:16-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpass}
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Redis =====
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ===== Ollama (Embedding Model) =====
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull bge-m3
+        wait
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===== Backend (FastAPI) =====
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads_data:/app/uploads
+      - chroma_data:/app/chroma_data
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://raguser:ragpass@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/0
+      REDIS_BROKER_URL: redis://redis:6379/1
+      OLLAMA_BASE_URL: http://ollama:11434
+      CHROMA_PERSIST_DIR: /app/chroma_data
+      UPLOAD_DIR: /app/uploads
+      TONGYI_API_KEY: ${TONGYI_API_KEY}
+      TONGYI_MODEL: ${TONGYI_MODEL:-qwen-max}
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-random-secret}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  # ===== Celery Worker =====
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-celery
+    volumes:
+      - uploads_data:/app/uploads
+      - chroma_data:/app/chroma_data
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://raguser:ragpass@postgres:5432/ragdb
+      REDIS_URL: redis://redis:6379/0
+      REDIS_BROKER_URL: redis://redis:6379/1
+      OLLAMA_BASE_URL: http://ollama:11434
+      CHROMA_PERSIST_DIR: /app/chroma_data
+      UPLOAD_DIR: /app/uploads
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+
+  # ===== Frontend (Nginx + React) =====
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  uploads_data:
+  chroma_data:

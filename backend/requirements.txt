@@ -1,0 +1,67 @@
+# FastAPI + LangChain + RAG 依赖
+
+# Web Framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# Database
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0
+alembic>=1.13.0
+psycopg2-binary>=2.9.9
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-dotenv>=1.0.1
+
+# Redis
+redis[hiredis]>=5.0.0
+
+# Celery
+celery[redis]>=5.3.0
+
+# LangChain
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-chroma>=0.1.0
+langchain-text-splitters>=0.3.0
+
+# LLM - 通义千问
+dashscope>=1.20.0
+
+# Embedding
+chromadb>=0.5.0
+
+# Document Processing
+pypdf>=5.0.0
+docx2txt>=0.8
+markdown>=3.5
+# unstructured is optional, often has install issues on Windows
+# unstructured>=0.16.0
+
+# Data Validation
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# HTTP
+httpx>=0.27.0
+aiofiles>=23.0
+
+# Chinese Tokenization (for BM25 hybrid search)
+jieba>=0.42.1
+rank-bm25>=0.2.2
+
+# Logging & Monitoring
+loguru>=0.7.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# SQLite (for local dev without PostgreSQL)
+aiosqlite>=0.20.0
+
+# PDF Export
+reportlab>=4.0
