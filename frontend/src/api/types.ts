@@ -74,6 +74,15 @@ export interface DocumentInfo {
   created_at: string | null;
 }
 
+// ===== Knowledge Content =====
+export interface DocumentContent {
+  document_id: string;
+  filename: string;
+  file_type: string;
+  content: string;
+  size: number;
+}
+
 // ===== Chat =====
 export interface ChatRequest {
   conversation_id: string | null;
@@ -93,6 +102,7 @@ export interface SSESourcesEvent {
 
 export interface SSEDoneEvent {
   type: 'done';
+  conversation_id?: string;
 }
 
 export interface SSEErrorEvent {

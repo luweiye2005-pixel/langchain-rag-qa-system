@@ -2,41 +2,51 @@
 Chroma 向量库操作
 """
 import os
+import threading
 from langchain_chroma import Chroma
 from app.config import settings
 
 
-# Global vector store instance
+# Global vector store instance with thread-safe lock
 _vector_store: Chroma | None = None
+_vector_store_lock = threading.Lock()
 
 
 def get_vector_store(embeddings=None) -> Chroma:
-    """获取或创建 Chroma 向量存储"""
+    """获取或创建 Chroma 向量存储（线程安全）"""
     global _vector_store
 
+    # Fast path: return cached instance without acquiring lock
     if _vector_store is not None:
         return _vector_store
 
-    persist_dir = settings.CHROMA_PERSIST_DIR
-    os.makedirs(persist_dir, exist_ok=True)
+    with _vector_store_lock:
+        # Double-check after acquiring lock
+        if _vector_store is not None:
+            return _vector_store
 
-    if embeddings is None:
-        from app.rag.embeddings import get_embeddings
-        embeddings = get_embeddings()
+        persist_dir = settings.CHROMA_PERSIST_DIR
+        os.makedirs(persist_dir, exist_ok=True)
 
-    _vector_store = Chroma(
-        collection_name=settings.CHROMA_COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=persist_dir,
-    )
+        if embeddings is None:
+            from app.rag.embeddings import get_embeddings
+            embeddings = get_embeddings()
+
+        _vector_store = Chroma(
+            collection_name=settings.CHROMA_COLLECTION_NAME,
+            embedding_function=embeddings,
+            persist_directory=persist_dir,
+            collection_metadata={"hnsw:space": "cosine"},
+        )
 
     return _vector_store
 
 
 def reset_vector_store():
-    """重置向量存储（用于文档变更后刷新）"""
+    """重置向量存储（用于文档变更后刷新，线程安全）"""
     global _vector_store
-    _vector_store = None
+    with _vector_store_lock:
+        _vector_store = None
 
 
 def add_documents_to_store(documents, metadatas, ids):

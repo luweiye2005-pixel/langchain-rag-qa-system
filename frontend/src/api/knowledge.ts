@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { DocumentInfo } from './types';
+import type { DocumentContent, DocumentInfo } from './types';
 
 export interface KnowledgeStats {
   total_documents: number;
@@ -41,6 +41,16 @@ export const knowledgeAPI = {
 
   reprocess: async (id: string): Promise<void> => {
     await apiClient.post(`/knowledge/documents/${id}/reprocess`);
+  },
+
+  getContent: async (id: string): Promise<DocumentContent> => {
+    const response = await apiClient.get(`/knowledge/documents/${id}/content`);
+    return response.data;
+  },
+
+  updateContent: async (id: string, content: string): Promise<{ message: string; status: string }> => {
+    const response = await apiClient.put(`/knowledge/documents/${id}/content`, { content });
+    return response.data;
   },
 
   getStats: async (): Promise<KnowledgeStats> => {

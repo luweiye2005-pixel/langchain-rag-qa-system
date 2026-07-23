@@ -19,6 +19,12 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting RAG Knowledge Base Q&A System...")
 
+    # Validate critical configuration
+    if not settings.DATABASE_URL:
+        raise RuntimeError("DATABASE_URL must be set in environment or .env file")
+    if len(settings.JWT_SECRET) < 32:
+        raise RuntimeError("JWT_SECRET must be at least 32 characters")
+
     # Create database tables
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -30,7 +36,7 @@ async def lifespan(app: FastAPI):
 
     # Create default admin user
     await seed_admin_user()
-    logger.info("Admin account ready (admin/123456)")
+    logger.info("Admin account initialized successfully")
 
     yield
 

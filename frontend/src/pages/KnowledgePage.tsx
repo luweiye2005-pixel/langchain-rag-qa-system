@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Button, Upload, Tag, Popconfirm, Space, message, Statistic, Row, Col } from 'antd';
-import { UploadOutlined, DeleteOutlined, ReloadOutlined, FileTextOutlined, InboxOutlined } from '@ant-design/icons';
+import { UploadOutlined, DeleteOutlined, ReloadOutlined, FileTextOutlined, InboxOutlined, EyeOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { knowledgeAPI, type KnowledgeStats } from '../api/knowledge';
 import type { DocumentInfo } from '../api/types';
+import DocumentContentModal from '../components/knowledge/DocumentContentModal';
 
 const { Dragger } = Upload;
 
@@ -12,6 +13,8 @@ export default function KnowledgePage() {
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [contentModalOpen, setContentModalOpen] = useState(false);
+  const [contentModalDoc, setContentModalDoc] = useState<DocumentInfo | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -94,9 +97,16 @@ export default function KnowledgePage() {
     { title: '片段数', dataIndex: 'chunk_count', key: 'chunk_count', width: 80 },
     { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: statusTag },
     {
-      title: '操作', key: 'actions', width: 160,
+      title: '操作', key: 'actions', width: 240,
       render: (_: any, record: DocumentInfo) => (
         <Space>
+          <Button
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() => { setContentModalDoc(record); setContentModalOpen(true); }}
+          >
+            查看
+          </Button>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => handleReprocess(record.id)} disabled={record.status === 'processing'}>
             重处理
           </Button>
@@ -146,6 +156,14 @@ export default function KnowledgePage() {
           pagination={{ pageSize: 20 }}
         />
       </Card>
+
+      {/* Document Content Modal */}
+      <DocumentContentModal
+        document={contentModalDoc}
+        open={contentModalOpen}
+        onClose={() => { setContentModalOpen(false); setContentModalDoc(null); }}
+        onSaved={fetchData}
+      />
     </div>
   );
 }

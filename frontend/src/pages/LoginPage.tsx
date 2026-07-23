@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Form, Input, Button, Typography, message, Space } from 'antd';
+import { Card, Form, Input, Button, Typography, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
@@ -49,11 +49,7 @@ export default function LoginPage() {
           </Form.Item>
 
           <div style={{ textAlign: 'center' }}>
-            <Space>
-              <Link to="/register">注册账号</Link>
-              <Typography.Text type="secondary">|</Typography.Text>
-              <Typography.Text type="secondary">管理员: admin / 123456</Typography.Text>
-            </Space>
+            <Link to="/register">注册账号</Link>
           </div>
         </Form>
       </Card>

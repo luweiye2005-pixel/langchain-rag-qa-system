@@ -19,6 +19,7 @@ async def init_redis():
             decode_responses=True,
             max_connections=50,
             socket_keepalive=True,
+            protocol=2,  # RESP2 兼容 Redis 5.x
         )
         await redis_client.ping()
     except Exception as e:

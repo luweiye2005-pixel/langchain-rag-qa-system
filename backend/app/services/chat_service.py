@@ -8,6 +8,13 @@ from app.rag.embeddings import get_embeddings
 from app.rag.vector_store import get_vector_store
 from loguru import logger
 
+# 余弦距离阈值：score=0表示完全相同，score=1表示完全无关
+# Chroma 使用 cosine 距离度量，超过此阈值的文档片段视为不相关
+# 注意：此阈值需根据实际 embedding 模型和业务场景调整
+RELEVANCE_THRESHOLD = 0.55
+# 每次检索返回的最相关文档片段数量
+TOP_K_RESULTS = 5
+
 
 class ChatService:
     """RAG 问答服务"""
@@ -54,7 +61,7 @@ class ChatService:
             retrieved_docs = []
             try:
                 retrieved_docs = self.vector_store.similarity_search_with_score(
-                    question, k=5
+                    question, k=TOP_K_RESULTS
                 )
             except Exception as e:
                 logger.warning(f"Vector search failed: {e}, answering without knowledge base")
@@ -63,7 +70,7 @@ class ChatService:
             context_parts = []
 
             for i, (doc, score) in enumerate(retrieved_docs):
-                if score < 0.2:
+                if score > RELEVANCE_THRESHOLD:
                     continue
 
                 doc_name = doc.metadata.get("filename", "unknown")
@@ -116,4 +123,4 @@ class ChatService:
 
         except Exception as e:
             logger.error(f"Chat stream error: {e}", exc_info=True)
-            yield {"type": "error", "message": f"问答处理出错: {str(e)}"}
+            yield {"type": "error", "message": "问答处理暂时不可用，请稍后重试"}

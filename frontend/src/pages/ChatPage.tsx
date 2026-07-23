@@ -104,7 +104,7 @@ export default function ChatPage() {
             setStreamingSources(event.documents);
             break;
           case 'done':
-            const newConvId = (event as any).conversation_id as string | undefined;
+            const newConvId = event.conversation_id;
             const activeConvId = newConvId || conversationId || '';
 
             // Add assistant message

@@ -3,13 +3,14 @@ import { useRoutes, useNavigate } from 'react-router-dom';
 import { Spin } from 'antd';
 import { useAuthStore } from './stores/authStore';
 import { routes } from './router';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function App() {
   const { isAuthenticated, isAdmin, isRestoring, restoreSession } = useAuthStore();
 
   useEffect(() => {
     restoreSession();
-  }, []);
+  }, [restoreSession]);
 
   const element = useRoutes(routes(isAuthenticated, isAdmin, isRestoring));
 
@@ -21,7 +22,7 @@ function App() {
     );
   }
 
-  return element;
+  return <ErrorBoundary>{element}</ErrorBoundary>;
 }
 
 export default App;

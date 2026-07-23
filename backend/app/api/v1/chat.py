@@ -3,6 +3,7 @@
 """
 import json
 import uuid
+import threading
 from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -19,15 +20,23 @@ from loguru import logger
 
 router = APIRouter()
 
-# Global chat service instance (initialized on first use)
+# Global chat service instance with thread-safe lock
 chat_service: ChatService | None = None
+_chat_service_lock = threading.Lock()
 
 
 def get_chat_service() -> ChatService:
+    """获取 ChatService 单例（线程安全）"""
     global chat_service
-    if chat_service is None:
-        chat_service = ChatService()
-    return chat_service
+    # Fast path: return cached instance without acquiring lock
+    if chat_service is not None:
+        return chat_service
+
+    with _chat_service_lock:
+        # Double-check after acquiring lock
+        if chat_service is None:
+            chat_service = ChatService()
+        return chat_service
 
 
 @router.post("")
@@ -134,8 +143,8 @@ async def send_message(
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
         except Exception as e:
-            logger.error(f"Chat stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            logger.error(f"Chat stream error: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': '服务暂时不可用，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         generate_sse(),

@@ -4,6 +4,7 @@
 import os
 import uuid
 import hashlib
+import threading
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,8 @@ from app.api.deps import get_admin_user
 from app.models.user import User
 from app.models.document import Document
 from app.config import settings
+from app.schemas.knowledge import DocumentContentResponse, UpdateContentRequest
+from loguru import logger
 
 router = APIRouter()
 
@@ -129,7 +132,6 @@ async def upload_document(
     await db.commit()
 
     # Process document in background thread (non-blocking)
-    import threading
     from app.tasks.document_tasks import run_process_in_thread
     thread = threading.Thread(
         target=run_process_in_thread,
@@ -194,8 +196,8 @@ async def delete_document(
     try:
         from app.rag.vector_store import delete_documents_from_store
         delete_documents_from_store(document.id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to delete vectors for document {document_id}: {e}")
 
     # Delete physical file
     try:
@@ -205,12 +207,12 @@ async def delete_document(
         parent_dir = os.path.dirname(document.file_path)
         if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
             os.rmdir(parent_dir)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to delete file for document {document_id}: {e}")
 
     # Delete from DB
     await db.delete(document)
-    await db.flush()
+    await db.commit()
 
     return {"message": "文档已删除"}
 
@@ -236,10 +238,166 @@ async def reprocess_document(
     try:
         from app.tasks.document_tasks import process_document
         process_document.delay(document.id)
-    except Exception:
-        pass
+    except Exception as e:
+        # Celery 不可用时，使用线程回退方案
+        logger.warning(f"Celery not available for reprocess, using thread fallback: {e}")
+        try:
+            from app.tasks.document_tasks import run_process_in_thread
+            thread = threading.Thread(
+                target=run_process_in_thread,
+                args=(document_id,),
+                daemon=True,
+            )
+            thread.start()
+        except Exception as thread_err:
+            logger.error(f"Thread fallback also failed for document {document_id}: {thread_err}")
+            document.status = "failed"
+            document.error_message = f"任务提交失败: {thread_err}"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="文档处理任务提交失败，请稍后重试",
+            )
 
     return {"message": "文档已重新加入处理队列", "status": "pending"}
+
+
+@router.get("/documents/{document_id}/content")
+async def get_document_content(
+    document_id: str,
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档原始文本内容（仅支持 txt/md/csv）"""
+    result = await db.execute(
+        select(Document).where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    # 仅文本文件支持在线查看
+    if document.file_type not in ("txt", "md", "csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"该文件类型（.{document.file_type}）不支持在线查看，仅支持 txt/md/csv 格式。请下载后使用本地编辑器查看。",
+        )
+
+    # 检查文件是否存在
+    if not os.path.exists(document.file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件已被删除")
+
+    # 读取文件内容（UTF-8 优先，GBK 回退）
+    content = ""
+    try:
+        with open(document.file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(document.file_path, "r", encoding="gbk") as f:
+                content = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read document {document_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="文件编码不受支持，无法读取内容",
+            )
+    except Exception as e:
+        logger.error(f"Failed to read document {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="读取文件内容失败",
+        )
+
+    return DocumentContentResponse(
+        document_id=document.id,
+        filename=document.filename,
+        file_type=document.file_type,
+        content=content,
+        size=len(content),
+    )
+
+
+@router.put("/documents/{document_id}/content")
+async def update_document_content(
+    document_id: str,
+    body: UpdateContentRequest,
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新文档内容并重新处理"""
+    result = await db.execute(
+        select(Document).where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    # 仅文本文件支持编辑
+    if document.file_type not in ("txt", "md", "csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"仅支持编辑 txt/md/csv 格式的文档",
+        )
+
+    # 确保文件目录存在
+    parent_dir = os.path.dirname(document.file_path)
+    os.makedirs(parent_dir, exist_ok=True)
+
+    # 写入新内容
+    try:
+        with open(document.file_path, "w", encoding="utf-8") as f:
+            f.write(body.content)
+    except Exception as e:
+        logger.error(f"Failed to write document {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="写入文件内容失败",
+        )
+
+    # 更新文档记录
+    content_bytes = body.content.encode("utf-8")
+    document.file_size = len(content_bytes)
+    document.file_hash = hashlib.sha256(content_bytes).hexdigest()
+    document.status = "pending"
+    document.error_message = None
+    await db.flush()
+
+    # 删除旧向量
+    try:
+        from app.rag.vector_store import delete_documents_from_store, reset_vector_store
+        delete_documents_from_store(document.id)
+        reset_vector_store()
+    except Exception as e:
+        logger.warning(f"Failed to delete old vectors for document {document_id}: {e}")
+
+    await db.commit()
+
+    # 触发重新处理
+    try:
+        from app.tasks.document_tasks import process_document
+        process_document.delay(document.id)
+    except Exception as e:
+        logger.warning(f"Celery not available, using thread fallback: {e}")
+        try:
+            from app.tasks.document_tasks import run_process_in_thread
+            thread = threading.Thread(
+                target=run_process_in_thread,
+                args=(document_id,),
+                daemon=True,
+            )
+            thread.start()
+        except Exception as thread_err:
+            logger.error(f"Thread fallback failed for document {document_id}: {thread_err}")
+            document.status = "failed"
+            document.error_message = f"重新处理提交失败: {thread_err}"
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="文档处理任务提交失败，请稍后重试",
+            )
+
+    return {"message": "文档内容已更新，正在重新处理", "status": "pending"}
 
 
 @router.get("/stats")

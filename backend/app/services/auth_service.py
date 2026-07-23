@@ -32,7 +32,7 @@ async def seed_admin_user():
             )
             db.add(admin)
             await db.commit()
-            logger.info("admin user created: admin/123456")
+            logger.info("Default admin user seeded successfully")
 
 
 async def register_user(
