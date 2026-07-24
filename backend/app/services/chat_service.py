@@ -2,10 +2,11 @@
 RAG 问答核心服务
 """
 from typing import AsyncGenerator, Dict, List, Any
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.rag.llm import get_llm
 from app.rag.embeddings import get_embeddings
 from app.rag.vector_store import get_vector_store
+from app.schemas.chat import ChatHistoryMessage
 from loguru import logger
 
 # 余弦距离阈值：score=0表示完全相同，score=1表示完全无关
@@ -46,6 +47,7 @@ class ChatService:
         self,
         question: str,
         conversation_id: str,
+        history: List[ChatHistoryMessage] | None = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式问答，逐 token 返回
@@ -75,7 +77,7 @@ class ChatService:
 
                 doc_name = doc.metadata.get("filename", "unknown")
                 chunk_text = doc.page_content[:300]
-                source_idx = i + 1
+                source_idx = len(sources) + 1
 
                 sources.append({
                     "doc_id": doc.metadata.get("document_id", ""),
@@ -83,6 +85,7 @@ class ChatService:
                     "chunk_id": doc.metadata.get("chunk_index", str(i)),
                     "content_snippet": chunk_text,
                     "score": round(float(score), 4),
+                    "citation_index": source_idx,
                 })
 
                 context_parts.append(
@@ -100,10 +103,15 @@ class ChatService:
                 "回答要专业、准确、简洁。"
             )
 
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=f"参考资料:\n{context}\n\n用户问题: {question}"),
-            ]
+            messages = [SystemMessage(content=system_prompt)]
+            for message in history or []:
+                if message.role == "assistant":
+                    messages.append(AIMessage(content=message.content))
+                else:
+                    messages.append(HumanMessage(content=message.content))
+            messages.append(
+                HumanMessage(content=f"参考资料:\n{context}\n\n用户问题: {question}")
+            )
 
             # 3. 流式生成 - 使用 LangChain astream
             full_content = ""

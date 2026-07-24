@@ -49,6 +49,9 @@ export interface SourceDocument {
   doc_name: string;
   chunk_id: string;
   content_snippet: string;
+  /** 与回答文本中 [n] 引用对应的编号。 */
+  citation_index?: number;
+  /** Chroma 余弦距离，数值越小表示越相关。 */
   score: number;
 }
 

@@ -5,16 +5,18 @@ import json
 import uuid
 import threading
 from typing import AsyncGenerator
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings
 from app.core.database import get_db
+from app.core.rate_limit import enforce_rate_limit
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatHistoryMessage, ChatRequest
 from app.services.chat_service import ChatService
 from loguru import logger
 
@@ -23,6 +25,7 @@ router = APIRouter()
 # Global chat service instance with thread-safe lock
 chat_service: ChatService | None = None
 _chat_service_lock = threading.Lock()
+MAX_HISTORY_MESSAGES = 10
 
 
 def get_chat_service() -> ChatService:
@@ -42,6 +45,7 @@ def get_chat_service() -> ChatService:
 @router.post("")
 async def send_message(
     request: ChatRequest,
+    http_request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -54,6 +58,13 @@ async def send_message(
     - done: 流结束
     - error: 错误消息
     """
+    await enforce_rate_limit(
+        http_request,
+        "chat",
+        current_user.id,
+        settings.RATE_LIMIT_CHAT_PER_MINUTE,
+    )
+
     # Validate or create conversation
     conversation = None
     is_new = False
@@ -76,6 +87,22 @@ async def send_message(
         db.add(conversation)
         await db.flush()
         logger.info(f"Created new conversation: {conversation.id}")
+
+    # 仅取当前用户所属会话的最近历史，避免无限增长的提示词。
+    history_result = await db.execute(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation.id,
+            Message.user_id == current_user.id,
+            Message.role.in_(("user", "assistant")),
+        )
+        .order_by(Message.created_at.desc())
+        .limit(MAX_HISTORY_MESSAGES)
+    )
+    history = [
+        ChatHistoryMessage(role=message.role, content=message.content)
+        for message in reversed(history_result.scalars().all())
+    ]
 
     # Save user message
     user_message = Message(
@@ -108,6 +135,7 @@ async def send_message(
             async for event in service.stream_chat(
                 question=request.message,
                 conversation_id=conversation.id,
+                history=history,
             ):
                 event_type = event.get("type")
 

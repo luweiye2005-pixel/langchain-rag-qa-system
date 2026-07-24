@@ -1,7 +1,9 @@
 """
 用户相关 API
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user
@@ -27,6 +29,22 @@ async def update_current_user(
 ):
     """更新当前用户信息"""
     if request.email is not None:
+        existing = await db.execute(
+            select(User.id).where(
+                User.email == request.email, User.id != current_user.id
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="邮箱已被注册"
+            )
         current_user.email = request.email
-    await db.flush()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="邮箱已被注册"
+        )
+    await db.refresh(current_user)
     return current_user

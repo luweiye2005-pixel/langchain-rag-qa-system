@@ -91,21 +91,25 @@ class TestLoginUser:
         from app.services.auth_service import login_user
 
         with patch("app.services.auth_service.verify_password", return_value=True):
-            with patch("app.services.auth_service.create_access_token", return_value="access-token"):
-                with patch("app.services.auth_service.create_refresh_token", return_value="refresh-token"):
-                    result = await login_user(mock_db, "admin", "correct_pass")
+            with patch(
+                "app.services.auth_service._issue_tokens",
+                return_value=("access-token", "refresh-token"),
+            ):
+                result = await login_user(mock_db, "admin", "correct_pass")
 
-                    assert result["access_token"] == "access-token"
-                    assert result["refresh_token"] == "refresh-token"
-                    assert result["user"]["username"] == "admin"
-                    assert result["user"]["is_admin"] is True
+                assert result["access_token"] == "access-token"
+                assert result["refresh_token"] == "refresh-token"
+                assert result["user"]["username"] == "admin"
+                assert result["user"]["is_admin"] is True
 
     @pytest.mark.asyncio
     async def test_login_wrong_password(self):
         """密码错误抛异常"""
         mock_db = AsyncMock()
         mock_user = self._make_user()
-        mock_db.execute.return_value = _make_mock_result(mock_user)
+        consumed = MagicMock()
+        consumed.rowcount = 1
+        mock_db.execute.side_effect = [_make_mock_result(mock_user), consumed]
 
         from app.services.auth_service import login_user
 
@@ -153,16 +157,28 @@ class TestRefreshAccessToken:
         mock_user.id = "user-123"
         mock_user.is_active = True
         mock_user.token_version = 0
-        mock_db.execute.return_value = _make_mock_result(mock_user)
+        consumed = MagicMock()
+        consumed.rowcount = 1
+        mock_db.execute.side_effect = [_make_mock_result(mock_user), consumed]
 
         from app.services.auth_service import refresh_access_token
 
-        mock_payload = {"sub": "user-123", "type": "refresh", "jti": "xxx"}
+        mock_payload = {
+            "sub": "user-123",
+            "type": "refresh",
+            "jti": "xxx",
+            "token_version": 0,
+        }
         with patch("app.services.auth_service.decode_token", return_value=mock_payload):
-            with patch("app.services.auth_service.create_access_token", return_value="new-access-token"):
-                with patch("app.services.auth_service.redis_client", None):
-                    result = await refresh_access_token("valid_refresh", mock_db)
-                    assert result == "new-access-token"
+            with patch(
+                "app.services.auth_service._issue_tokens",
+                return_value=("new-access-token", "new-refresh-token"),
+            ):
+                result = await refresh_access_token("valid_refresh", mock_db)
+                assert result == {
+                    "access_token": "new-access-token",
+                    "refresh_token": "new-refresh-token",
+                }
 
     @pytest.mark.asyncio
     async def test_refresh_invalid_token_type(self):

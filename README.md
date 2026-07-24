@@ -45,22 +45,25 @@ ollama pull bge-m3
 
 ```bash
 cp .env.example backend/.env
-# 编辑 backend/.env，填入你的通义千问 API Key
-# TONGYI_API_KEY=sk-your-key
+# 编辑 backend/.env：填入通义千问 API Key 与至少 32 字符的 JWT_SECRET
+# OPENAI_API_KEY=sk-your-qwen-api-key
+# JWT_SECRET=<使用安全随机字符串>
 ```
 
 **获取 API Key**：访问 [阿里百炼平台](https://bailian.console.aliyun.com/) 注册并获取。
+本地默认使用 SQLite（`DATABASE_URL=sqlite+aiosqlite:///./rag.db`）。如需创建初始管理员，请显式填写 `INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_EMAIL` 和强密码 `INITIAL_ADMIN_PASSWORD`；项目不再创建 `admin / 123456`。
 
 ### 3. 安装依赖
 
 ```bash
 # 后端
 cd backend
-pip install -r requirements.txt
+pip install -r requirements.lock
+python -m alembic upgrade head
 
 # 前端
 cd frontend
-npm install
+npm ci
 ```
 
 ### 4. 启动服务
@@ -79,13 +82,14 @@ npm run dev
 
 - 前端：http://localhost:5173
 - API 文档：http://localhost:8000/docs
-- 管理员：admin / 123456
+- 管理员：仅在配置 `INITIAL_ADMIN_*` 后创建
 
 ### Docker 部署（可选）
 
 ```bash
 # 配置通义千问 API Key
-export TONGYI_API_KEY=sk-your-key
+export OPENAI_API_KEY=sk-your-qwen-api-key
+export JWT_SECRET=<至少 32 字符的随机字符串>
 
 # 启动全部服务
 docker-compose up -d
@@ -124,10 +128,11 @@ LangChainRAG/
 确保 Ollama 正在运行：`ollama serve`，且已拉取模型：`ollama pull bge-m3`
 
 **Q: 通义千问 API 调用失败？**
-检查 `backend/.env` 中的 `TONGYI_API_KEY` 是否正确配置
+检查 `backend/.env` 中的 `OPENAI_API_KEY` 是否填写了阿里云百炼的 API Key
 
 **Q: 没有 PostgreSQL？**
-本地开发默认使用 SQLite，无需安装 PostgreSQL。Docker 部署会自动启动 PostgreSQL。
+本地开发默认使用 SQLite，无需安装 PostgreSQL。Docker 部署会自动启动 PostgreSQL；已有旧数据库首次启用迁移时，确认 schema 已同步后执行 `python -m alembic stamp head`，新数据库执行 `python -m alembic upgrade head`。
 
 **Q: 前端代理 API 失败？**
 Vite 已配置代理 `/api` → `http://localhost:8000`，确保后端在 8000 端口运行。
+非同源部署时设置 `VITE_API_BASE_URL`，例如 `https://api.example.com/api/v1`。

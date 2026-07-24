@@ -79,14 +79,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const response = await apiClient.post('/auth/refresh', {
         refresh_token: storedRefresh,
       });
-      const accessToken = response.data.access_token;
+      const { access_token: accessToken, refresh_token: refreshToken } = response.data;
       sessionStorage.setItem('accessToken', accessToken);
+      localStorage.setItem('refreshToken', refreshToken);
 
       const user = storedUser ? JSON.parse(storedUser) : null;
       set({
         user,
         accessToken,
-        refreshToken: storedRefresh,
+        refreshToken,
         isAuthenticated: true,
         isAdmin: user?.is_admin ?? false,
         isRestoring: false,

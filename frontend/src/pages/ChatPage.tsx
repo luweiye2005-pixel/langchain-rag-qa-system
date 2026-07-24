@@ -94,6 +94,7 @@ export default function ChatPage() {
 
     try {
       let fullContent = '';
+      let receivedSources: SSESourcesEvent['documents'] | null = null;
       for await (const event of streamChat(conversationId || null, trimmed)) {
         switch (event.type) {
           case 'token':
@@ -101,6 +102,7 @@ export default function ChatPage() {
             setStreamingContent(fullContent);
             break;
           case 'sources':
+            receivedSources = event.documents;
             setStreamingSources(event.documents);
             break;
           case 'done':
@@ -113,7 +115,7 @@ export default function ChatPage() {
               conversation_id: activeConvId,
               role: 'assistant',
               content: fullContent,
-              sources: streamingSources || null,
+              sources: receivedSources,
               token_count: fullContent.length,
               created_at: new Date().toISOString(),
             };
@@ -145,7 +147,7 @@ export default function ChatPage() {
     } finally {
       setIsStreaming(false);
     }
-  }, [inputValue, isStreaming, conversationId, streamingSources]);
+  }, [inputValue, isStreaming, conversationId, navigate, refreshConversations]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

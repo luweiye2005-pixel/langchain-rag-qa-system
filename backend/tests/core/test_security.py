@@ -193,11 +193,13 @@ class TestCreateRefreshToken:
         payload = decode_token(token)
         assert payload["type"] == "refresh"
 
-    def test_no_token_version_in_refresh(self):
-        """Refresh token 不包含 token_version"""
-        token = create_refresh_token("user-001")
+    def test_refresh_token_includes_version_and_jti(self):
+        """Refresh token 包含 token_version 与一次性 jti"""
+        token = create_refresh_token("user-001", token_version=3)
         payload = decode_token(token)
-        assert "token_version" not in payload
+        assert payload["token_version"] == 3
+        assert isinstance(payload["jti"], str)
+        assert len(payload["jti"]) > 0
 
     def test_token_has_expiration(self):
         """包含过期时间"""

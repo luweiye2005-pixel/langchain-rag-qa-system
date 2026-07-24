@@ -6,9 +6,8 @@ WORKDIR /app
 # Use Taobao npm mirror for China
 RUN npm config set registry https://registry.npmmirror.com
 
-COPY package.json package-lock.json* pnpm-lock.yaml* ./
-RUN npm install 2>/dev/null || \
-    (npm install -g pnpm && pnpm install --frozen-lockfile)
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 RUN npm run build

@@ -74,11 +74,14 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       CHROMA_PERSIST_DIR: /app/chroma_data
       UPLOAD_DIR: /app/uploads
-      TONGYI_API_KEY: ${TONGYI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       TONGYI_MODEL: ${TONGYI_MODEL:-qwen-max}
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-random-secret}
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中配置至少 32 字符的 JWT_SECRET}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,7 +108,7 @@ services:
       CHROMA_PERSIST_DIR: /app/chroma_data
       UPLOAD_DIR: /app/uploads
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    command: sh -c "python -m alembic upgrade head && celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2"
     depends_on:
       - postgres
       - redis

@@ -73,31 +73,34 @@ export default function MessageBubble({ message, isStreaming }: Props) {
                   ),
                   children: (
                     <div>
-                      {message.sources.map((source: SourceDocument, idx: number) => (
-                        <div key={idx} style={{
-                          marginBottom: 8,
-                          padding: '8px 12px',
-                          background: '#fafafa',
-                          borderRadius: 8,
-                          borderLeft: '3px solid #1677ff',
-                        }}>
-                          <div style={{ marginBottom: 4 }}>
-                            <Tag color="blue">[{idx + 1}]</Tag>
-                            <Text strong style={{ fontSize: 13 }}>
-                              {source.doc_name}
-                            </Text>
-                            <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                              相关度: {(source.score * 100).toFixed(1)}%
-                            </Text>
+                      {message.sources.map((source: SourceDocument, idx: number) => {
+                        const citationIndex = source.citation_index ?? idx + 1;
+                        return (
+                          <div key={`${source.doc_id}-${source.chunk_id}-${citationIndex}`} style={{
+                            marginBottom: 8,
+                            padding: '8px 12px',
+                            background: '#fafafa',
+                            borderRadius: 8,
+                            borderLeft: '3px solid #1677ff',
+                          }}>
+                            <div style={{ marginBottom: 4 }}>
+                              <Tag color="blue">[{citationIndex}]</Tag>
+                              <Text strong style={{ fontSize: 13 }}>
+                                {source.doc_name}
+                              </Text>
+                              <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                                距离: {source.score.toFixed(4)}
+                              </Text>
+                            </div>
+                            <Paragraph
+                              ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}
+                              style={{ marginBottom: 0, fontSize: 13, color: '#666' }}
+                            >
+                              {source.content_snippet}
+                            </Paragraph>
                           </div>
-                          <Paragraph
-                            ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}
-                            style={{ marginBottom: 0, fontSize: 13, color: '#666' }}
-                          >
-                            {source.content_snippet}
-                          </Paragraph>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ),
                 }]}

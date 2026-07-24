@@ -183,6 +183,43 @@ class TestDocumentModel:
         assert doc.status == "failed"
         assert doc.error_message == "处理失败"
 
+    def test_document_has_revision_and_unique_hash(self):
+        """文档 revision 默认从 1 开始，内容哈希为唯一约束。"""
+        from app.models.document import Document
+
+        doc = Document(
+            filename="t.txt", file_path="/t.txt", file_type="txt",
+            file_size=10, file_hash="unique-hash", uploaded_by="u",
+        )
+        assert str(Document.__table__.c.revision.server_default.arg) == "1"
+        assert any(
+            constraint.columns.keys() == ["file_hash"]
+            for constraint in Document.__table__.constraints
+            if hasattr(constraint, "columns")
+        )
+
+    @pytest.mark.asyncio
+    async def test_sqlite_schema_upgrade_adds_revision_and_unique_index(self):
+        """已有 SQLite documents 表可在不使用 Alembic 时补齐一致性字段。"""
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from app.models.document import ensure_document_sqlite_schema
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                "CREATE TABLE documents (id TEXT PRIMARY KEY, file_hash TEXT NOT NULL)"
+            ))
+        session_factory = async_sessionmaker(engine)
+        async with session_factory() as session:
+            await ensure_document_sqlite_schema(session)
+            columns = (await session.execute(text("PRAGMA table_info(documents)"))).all()
+            indexes = (await session.execute(text("PRAGMA index_list(documents)"))).all()
+
+        assert "revision" in {column[1] for column in columns}
+        assert "uq_documents_file_hash" in {index[1] for index in indexes}
+        await engine.dispose()
+
     def test_document_repr(self):
         """__repr__ 方法"""
         from app.models.document import Document

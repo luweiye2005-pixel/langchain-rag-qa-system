@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from app.config import settings
-from app.core.database import Base, async_engine
+from app.core.database import async_engine
 from app.core.redis import init_redis, close_redis
 from app.api.v1.router import api_router
 from app.services.auth_service import seed_admin_user
@@ -25,14 +25,14 @@ async def lifespan(app: FastAPI):
     if len(settings.JWT_SECRET) < 32:
         raise RuntimeError("JWT_SECRET must be at least 32 characters")
 
-    # Create database tables
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialized")
-
     # Initialize Redis
     await init_redis()
-    logger.info("Redis connected")
+    from app.core.redis import redis_client
+
+    if redis_client is not None:
+        logger.info("Redis connected")
+    else:
+        logger.warning("Redis unavailable; rate limiting falls back to in-process counters")
 
     # Create default admin user
     await seed_admin_user()

@@ -1,8 +1,6 @@
-import apiClient from './client';
+import { API_BASE_URL } from './client';
 import { useAuthStore } from '../stores/authStore';
 import type { ChatRequest, SSEEvent } from './types';
-
-const API_BASE_URL = '/api/v1';
 
 /**
  * SSE 流式聊天
@@ -39,24 +37,44 @@ export async function* streamChat(
   const decoder = new TextDecoder();
   let buffer = '';
 
+  const parseEvent = (rawEvent: string): SSEEvent | null => {
+    const data = rawEvent
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).replace(/^ /, ''))
+      .join('\n');
+
+    if (!data) return null;
+
+    try {
+      return JSON.parse(data) as SSEEvent;
+    } catch {
+      return null;
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+    }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const event: SSEEvent = JSON.parse(line.slice(6));
-          yield event;
-        } catch {
-          // Skip unparseable lines
-        }
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() || '';
+    for (const rawEvent of events) {
+      const event = parseEvent(rawEvent);
+      if (event) {
+        yield event;
       }
     }
+
+    if (done) break;
+  }
+
+  buffer += decoder.decode();
+  const finalEvent = parseEvent(buffer);
+  if (finalEvent) {
+    yield finalEvent;
   }
 }
 

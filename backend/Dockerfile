@@ -7,9 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (use Tsinghua mirror for China)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+# Install locked Python dependencies (use Tsinghua mirror for China)
+COPY requirements.lock .
+RUN pip install --no-cache-dir -r requirements.lock \
     -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Copy app code

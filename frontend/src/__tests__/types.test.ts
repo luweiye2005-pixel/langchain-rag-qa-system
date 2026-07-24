@@ -73,6 +73,7 @@ describe('TypeScript Types', () => {
       const sources: SourceDocument[] = [{
         doc_id: 'doc-1', doc_name: 'test.pdf',
         chunk_id: '0', content_snippet: 'snippet',
+        citation_index: 1,
         score: 0.95,
       }];
       const msg: Message = {
@@ -83,6 +84,7 @@ describe('TypeScript Types', () => {
       };
       expect(msg.sources).toHaveLength(1);
       expect(msg.sources![0].score).toBe(0.95);
+      expect(msg.sources![0].citation_index).toBe(1);
     });
   });
 

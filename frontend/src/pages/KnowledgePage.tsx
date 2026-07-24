@@ -19,14 +19,22 @@ export default function KnowledgePage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [docsData, statsData] = await Promise.all([
+      const [docsResult, statsResult] = await Promise.allSettled([
         knowledgeAPI.getDocuments({ size: 100 }),
         knowledgeAPI.getStats(),
       ]);
-      setDocuments(docsData.documents);
-      setStats(statsData);
-    } catch (err: any) {
-      message.error('获取数据失败');
+
+      if (docsResult.status === 'fulfilled') {
+        setDocuments(docsResult.value.documents);
+      } else {
+        message.error('获取文档列表失败');
+      }
+
+      if (statsResult.status === 'fulfilled') {
+        setStats(statsResult.value);
+      } else {
+        message.error('获取知识库统计失败');
+      }
     } finally {
       setLoading(false);
     }

@@ -1,22 +1,66 @@
 """
 知识库管理 API (管理员专用)
 """
-import os
 import uuid
 import hashlib
 import threading
+import os
+import tempfile
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_admin_user
 from app.models.user import User
-from app.models.document import Document
+from app.models.document import Document, ensure_document_sqlite_schema
 from app.config import settings
 from app.schemas.knowledge import DocumentContentResponse, UpdateContentRequest
 from loguru import logger
 
 router = APIRouter()
+_document_file_lock = threading.RLock()
+
+
+def _upload_root() -> Path:
+    """返回已解析的上传根目录，所有文档物理文件必须位于该目录下。"""
+    root = Path(settings.UPLOAD_DIR).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _ensure_managed_path(file_path: str) -> Path:
+    """验证数据库中的路径没有逃逸上传根目录。"""
+    root = _upload_root()
+    path = Path(file_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("document path is outside the upload directory") from exc
+    return path
+
+
+def _remove_document_file(file_path: str) -> None:
+    """安全删除受管理的文件及其空 UUID 目录。"""
+    path = _ensure_managed_path(file_path)
+    if path.exists():
+        path.unlink()
+    if path.parent != _upload_root() and path.parent.is_dir() and not any(path.parent.iterdir()):
+        path.parent.rmdir()
+
+
+def _start_processing(document_id: str, revision: int) -> None:
+    """提交带 revision 的任务；Celery 不可用时在本进程线程中执行。"""
+    try:
+        from app.tasks.document_tasks import process_document
+        process_document.delay(document_id, revision)
+    except Exception as exc:
+        logger.warning(f"Celery unavailable, using thread fallback: {exc}")
+        from app.tasks.document_tasks import run_process_in_thread
+        threading.Thread(
+            target=run_process_in_thread, args=(document_id, revision), daemon=True
+        ).start()
 
 
 @router.get("/documents")
@@ -28,6 +72,8 @@ async def list_documents(
     db: AsyncSession = Depends(get_db),
 ):
     """获取知识库文档列表"""
+    await ensure_document_sqlite_schema(db)
+
     conditions = []
     if status_filter:
         conditions.append(Document.status == status_filter)
@@ -74,6 +120,7 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ):
     """上传文档到知识库"""
+    await ensure_document_sqlite_schema(db)
     # Validate file type
     filename = file.filename or "unknown"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -93,18 +140,10 @@ async def upload_document(
             detail=f"文件大小超过限制 ({settings.MAX_UPLOAD_SIZE_MB}MB)",
         )
 
-    # Save file
-    upload_dir = os.path.join(settings.UPLOAD_DIR, str(uuid.uuid4()))
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, filename)
-
-    with open(file_path, "wb") as f:
-        f.write(content)
-
     # Compute SHA-256 hash
     file_hash = hashlib.sha256(content).hexdigest()
 
-    # Check for duplicate
+    # Check for duplicate before persisting a final file.
     existing = await db.execute(
         select(Document).where(Document.file_hash == file_hash)
     )
@@ -114,31 +153,48 @@ async def upload_document(
             detail="该文档已存在（内容重复）",
         )
 
-    # Create document record
-    document = Document(
-        filename=filename,
-        file_path=file_path,
-        file_type=ext,
-        file_size=file_size,
-        file_hash=file_hash,
-        status="pending",
-        uploaded_by=admin_user.id,
-    )
-    db.add(document)
-    await db.flush()
+    root = _upload_root()
+    temp_path: Path | None = None
+    final_path: Path | None = None
+    try:
+        # Never use the user-controlled filename in the filesystem.  The temporary
+        # file is atomically moved only after duplicate validation has passed.
+        with tempfile.NamedTemporaryFile(dir=root, prefix=".upload-", delete=False) as tmp:
+            tmp.write(content)
+            temp_path = Path(tmp.name)
+
+        storage_dir = root / str(uuid.uuid4())
+        storage_dir.mkdir(mode=0o700)
+        final_path = storage_dir / f"{uuid.uuid4().hex}.{ext}"
+        os.replace(temp_path, final_path)
+        temp_path = None
+
+        document = Document(
+            filename=filename,
+            file_path=str(final_path),
+            file_type=ext,
+            file_size=file_size,
+            file_hash=file_hash,
+            status="pending",
+            uploaded_by=admin_user.id,
+        )
+        db.add(document)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        if final_path is not None:
+            _remove_document_file(str(final_path))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该文档已存在（内容重复）")
+    except Exception:
+        await db.rollback()
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+        if final_path is not None:
+            _remove_document_file(str(final_path))
+        raise
+
     doc_id = document.id
-
-    # Commit first so the thread can find the document
-    await db.commit()
-
-    # Process document in background thread (non-blocking)
-    from app.tasks.document_tasks import run_process_in_thread
-    thread = threading.Thread(
-        target=run_process_in_thread,
-        args=(doc_id,),
-        daemon=True,
-    )
-    thread.start()
+    _start_processing(doc_id, document.revision)
 
     return {
         "id": doc_id,
@@ -192,21 +248,19 @@ async def delete_document(
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
 
-    # Delete from Chroma vector store
+    # The vector store and filesystem each serialize write/delete operations in
+    # this process, preventing a task from restoring a just-deleted document.
     try:
         from app.rag.vector_store import delete_documents_from_store
         delete_documents_from_store(document.id)
     except Exception as e:
         logger.warning(f"Failed to delete vectors for document {document_id}: {e}")
 
-    # Delete physical file
     try:
-        if os.path.exists(document.file_path):
-            os.remove(document.file_path)
-        # Remove parent directory if empty
-        parent_dir = os.path.dirname(document.file_path)
-        if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
-            os.rmdir(parent_dir)
+        with _document_file_lock:
+            _remove_document_file(document.file_path)
+    except ValueError:
+        logger.error(f"Refusing to delete unmanaged path for document {document_id}")
     except Exception as e:
         logger.warning(f"Failed to delete file for document {document_id}: {e}")
 
@@ -224,6 +278,7 @@ async def reprocess_document(
     db: AsyncSession = Depends(get_db),
 ):
     """重新处理文档"""
+    await ensure_document_sqlite_schema(db)
     result = await db.execute(
         select(Document).where(Document.id == document_id)
     )
@@ -231,33 +286,11 @@ async def reprocess_document(
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
 
+    document.revision += 1
     document.status = "pending"
     document.error_message = None
-    await db.flush()
-
-    try:
-        from app.tasks.document_tasks import process_document
-        process_document.delay(document.id)
-    except Exception as e:
-        # Celery 不可用时，使用线程回退方案
-        logger.warning(f"Celery not available for reprocess, using thread fallback: {e}")
-        try:
-            from app.tasks.document_tasks import run_process_in_thread
-            thread = threading.Thread(
-                target=run_process_in_thread,
-                args=(document_id,),
-                daemon=True,
-            )
-            thread.start()
-        except Exception as thread_err:
-            logger.error(f"Thread fallback also failed for document {document_id}: {thread_err}")
-            document.status = "failed"
-            document.error_message = f"任务提交失败: {thread_err}"
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="文档处理任务提交失败，请稍后重试",
-            )
+    await db.commit()
+    _start_processing(document.id, document.revision)
 
     return {"message": "文档已重新加入处理队列", "status": "pending"}
 
@@ -283,18 +316,24 @@ async def get_document_content(
             detail=f"该文件类型（.{document.file_type}）不支持在线查看，仅支持 txt/md/csv 格式。请下载后使用本地编辑器查看。",
         )
 
+    try:
+        file_path = _ensure_managed_path(document.file_path)
+    except ValueError:
+        logger.error(f"Refusing to read unmanaged path for document {document_id}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件已被删除")
+
     # 检查文件是否存在
-    if not os.path.exists(document.file_path):
+    if not file_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件已被删除")
 
     # 读取文件内容（UTF-8 优先，GBK 回退）
     content = ""
     try:
-        with open(document.file_path, "r", encoding="utf-8") as f:
+        with file_path.open("r", encoding="utf-8") as f:
             content = f.read()
     except UnicodeDecodeError:
         try:
-            with open(document.file_path, "r", encoding="gbk") as f:
+            with file_path.open("r", encoding="gbk") as f:
                 content = f.read()
         except Exception as e:
             logger.error(f"Failed to read document {document_id}: {e}")
@@ -326,6 +365,7 @@ async def update_document_content(
     db: AsyncSession = Depends(get_db),
 ):
     """更新文档内容并重新处理"""
+    await ensure_document_sqlite_schema(db)
     result = await db.execute(
         select(Document).where(Document.id == document_id)
     )
@@ -340,63 +380,57 @@ async def update_document_content(
             detail=f"仅支持编辑 txt/md/csv 格式的文档",
         )
 
-    # 确保文件目录存在
-    parent_dir = os.path.dirname(document.file_path)
-    os.makedirs(parent_dir, exist_ok=True)
-
-    # 写入新内容
-    try:
-        with open(document.file_path, "w", encoding="utf-8") as f:
-            f.write(body.content)
-    except Exception as e:
-        logger.error(f"Failed to write document {document_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="写入文件内容失败",
-        )
-
-    # 更新文档记录
     content_bytes = body.content.encode("utf-8")
+    new_hash = hashlib.sha256(content_bytes).hexdigest()
+    duplicate = await db.execute(
+        select(Document.id).where(
+            Document.file_hash == new_hash, Document.id != document.id
+        )
+    )
+    if duplicate.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该文档已存在（内容重复）")
+
+    try:
+        file_path = _ensure_managed_path(document.file_path)
+    except ValueError:
+        logger.error(f"Refusing to write unmanaged path for document {document_id}")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="文档存储路径无效")
+
+    # Update the database first, then atomically replace the managed file. This
+    # avoids partially written content being consumed by the background worker.
     document.file_size = len(content_bytes)
-    document.file_hash = hashlib.sha256(content_bytes).hexdigest()
+    document.file_hash = new_hash
+    document.revision += 1
     document.status = "pending"
     document.error_message = None
-    await db.flush()
-
-    # 删除旧向量
     try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该文档已存在（内容重复）")
+
+    try:
+        with _document_file_lock:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=file_path.parent, prefix=".update-", delete=False
+            ) as tmp:
+                tmp.write(content_bytes)
+                temp_path = Path(tmp.name)
+            os.replace(temp_path, file_path)
+
+        # 删除旧向量；向量存储内部持有进程内写锁。
         from app.rag.vector_store import delete_documents_from_store, reset_vector_store
         delete_documents_from_store(document.id)
         reset_vector_store()
     except Exception as e:
-        logger.warning(f"Failed to delete old vectors for document {document_id}: {e}")
+        logger.error(f"Failed to update document {document_id}: {e}")
+        document.status = "failed"
+        document.error_message = f"更新文件或清理旧向量失败: {e}"
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="更新文档失败")
 
-    await db.commit()
-
-    # 触发重新处理
-    try:
-        from app.tasks.document_tasks import process_document
-        process_document.delay(document.id)
-    except Exception as e:
-        logger.warning(f"Celery not available, using thread fallback: {e}")
-        try:
-            from app.tasks.document_tasks import run_process_in_thread
-            thread = threading.Thread(
-                target=run_process_in_thread,
-                args=(document_id,),
-                daemon=True,
-            )
-            thread.start()
-        except Exception as thread_err:
-            logger.error(f"Thread fallback failed for document {document_id}: {thread_err}")
-            document.status = "failed"
-            document.error_message = f"重新处理提交失败: {thread_err}"
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="文档处理任务提交失败，请稍后重试",
-            )
-
+    _start_processing(document.id, document.revision)
     return {"message": "文档内容已更新，正在重新处理", "status": "pending"}
 
 

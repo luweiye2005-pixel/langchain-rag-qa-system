@@ -3,7 +3,8 @@
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, BigInteger, DateTime, ForeignKey, func
+from sqlalchemy import String, Text, Integer, BigInteger, DateTime, ForeignKey, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -27,7 +28,10 @@ class Document(Base):
         BigInteger, nullable=False
     )
     file_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True
+        String(64), nullable=False, unique=True
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
     )
     chunk_count: Mapped[int] = mapped_column(
         Integer, default=0
@@ -53,3 +57,25 @@ class Document(Base):
 
     def __repr__(self) -> str:
         return f"<Document(id={self.id}, filename={self.filename}, status={self.status})>"
+
+
+async def ensure_document_sqlite_schema(db: AsyncSession) -> None:
+    """补齐旧 SQLite 数据库的文档一致性字段（新库由 metadata 直接创建）。"""
+    if db.bind is None or db.bind.dialect.name != "sqlite":
+        return
+
+    columns = {
+        row[1] for row in (await db.execute(text("PRAGMA table_info(documents)"))).all()
+    }
+    if "revision" not in columns:
+        await db.execute(
+            text("ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        )
+    # SQLite 无法通过 ALTER TABLE 添加 UNIQUE 约束，使用等效唯一索引。
+    await db.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_file_hash "
+            "ON documents (file_hash)"
+        )
+    )
+    await db.commit()

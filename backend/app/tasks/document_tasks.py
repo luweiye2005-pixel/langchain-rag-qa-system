@@ -4,20 +4,19 @@
 import asyncio
 from app.tasks.celery_app import celery_app
 from app.core.database import AsyncSessionLocal
-from sqlalchemy import select
-from app.models.document import Document
+from sqlalchemy import select, update
+from app.models.document import Document, ensure_document_sqlite_schema
 from app.rag.loader import load_document
 from app.rag.splitter import split_documents
 from app.rag.embeddings import get_embeddings
 from app.rag.vector_store import (
-    get_vector_store,
-    add_documents_to_store,
+    replace_document_texts,
     reset_vector_store,
 )
 from loguru import logger
 
 
-async def _process_document_impl(document_id: str) -> dict:
+async def _process_document_impl(document_id: str, revision: int | None = None) -> dict:
     """
     文档处理核心逻辑（供 Celery 任务和直接调用复用）
 
@@ -28,17 +27,40 @@ async def _process_document_impl(document_id: str) -> dict:
     4. 更新数据库状态
     """
     async with AsyncSessionLocal() as db:
+        await ensure_document_sqlite_schema(db)
         result = await db.execute(
             select(Document).where(Document.id == document_id)
         )
         doc = result.scalar_one_or_none()
         if doc is None:
-            raise ValueError(f"Document not found: {document_id}")
+            logger.info(f"Skipping deleted document task: {document_id}")
+            return {"document_id": document_id, "status": "skipped"}
+
+        expected_revision = doc.revision if revision is None else revision
+        if doc.revision != expected_revision or doc.status != "pending":
+            logger.info(
+                f"Skipping stale/duplicate task for {document_id} "
+                f"(expected revision {expected_revision}, current {doc.revision}, status {doc.status})"
+            )
+            return {"document_id": document_id, "status": "skipped"}
 
         try:
-            # Update status to processing
-            doc.status = "processing"
+            # Atomically claim this revision. Duplicate Celery deliveries can
+            # otherwise both observe ``pending`` and process the same document.
+            claim = await db.execute(
+                update(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.revision == expected_revision,
+                    Document.status == "pending",
+                )
+                .values(status="processing")
+            )
+            if claim.rowcount != 1:
+                logger.info(f"Skipping already-claimed task for document {document_id}")
+                return {"document_id": document_id, "status": "skipped"}
             await db.commit()
+            await db.refresh(doc)
 
             # 1. Load document
             documents = load_document(doc.file_path, doc.file_type)
@@ -70,14 +92,22 @@ async def _process_document_impl(document_id: str) -> dict:
 
             ids = [f"{doc.id}_chunk_{i}" for i in range(len(chunks))]
 
-            store = get_vector_store(embeddings)
-            store.add_texts(
-                texts=texts,
-                metadatas=metadatas,
-                ids=ids,
-            )
+            # A content update/delete may have happened while embeddings were built.
+            # Refresh before mutating Chroma so stale tasks cannot restore old vectors.
+            await db.refresh(doc)
+            if doc.revision != expected_revision or doc.status != "processing":
+                logger.info(f"Discarding stale vectors for document {document_id}")
+                return {"document_id": document_id, "status": "skipped"}
+
+            # Replace rather than append so retries/reprocessing cannot leave old chunks.
+            replace_document_texts(doc.id, texts, metadatas, ids, embeddings)
 
             # 4. Update document status
+            await db.refresh(doc)
+            if doc.revision != expected_revision or doc.status != "processing":
+                # This is defensive: the vector operation is serialized, but a newer
+                # revision can still be committed between the checks.
+                return {"document_id": document_id, "status": "skipped"}
             doc.status = "completed"
             doc.chunk_count = len(chunks)
             await db.commit()
@@ -94,14 +124,16 @@ async def _process_document_impl(document_id: str) -> dict:
 
         except Exception as e:
             logger.error(f"Error processing document {doc.filename}: {e}")
-            doc.status = "failed"
-            doc.error_message = str(e)
-            await db.commit()
+            await db.refresh(doc)
+            if doc.revision == expected_revision and doc.status == "processing":
+                doc.status = "failed"
+                doc.error_message = str(e)
+                await db.commit()
             raise
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def process_document(self, document_id: str) -> dict:
+def process_document(self, document_id: str, revision: int | None = None) -> dict:
     """
     Celery 异步文档处理任务
 
@@ -112,7 +144,7 @@ def process_document(self, document_id: str) -> dict:
     logger.info(f"Processing document: {document_id}")
 
     async def _run():
-        return await _process_document_impl(document_id)
+        return await _process_document_impl(document_id, revision)
 
     try:
         loop = asyncio.get_event_loop()
@@ -128,7 +160,7 @@ def process_document(self, document_id: str) -> dict:
         return asyncio.run(_run())
 
 
-def run_process_in_thread(document_id: str):
+def run_process_in_thread(document_id: str, revision: int | None = None):
     """在独立线程中运行异步文档处理（无 Celery 回退方案）
 
     在子线程中创建全新的事件循环，避免与主线程的循环冲突。
@@ -137,7 +169,7 @@ def run_process_in_thread(document_id: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_process_document_impl(document_id))
+        loop.run_until_complete(_process_document_impl(document_id, revision))
     finally:
         loop.close()
 

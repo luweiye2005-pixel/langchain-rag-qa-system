@@ -1,7 +1,7 @@
 """
 认证相关 API
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.api.deps import get_current_user
@@ -20,6 +20,8 @@ from app.services.auth_service import (
     refresh_access_token,
     change_user_password,
 )
+from app.config import settings
+from app.core.rate_limit import enforce_rate_limit
 
 router = APIRouter()
 
@@ -44,9 +46,13 @@ async def register(
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: LoginRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """用户登录"""
+    await enforce_rate_limit(
+        http_request, "login", request.username, settings.RATE_LIMIT_LOGIN_PER_MINUTE
+    )
     try:
         result = await login_user(db, request.username, request.password)
         return result
@@ -61,8 +67,7 @@ async def refresh_token(
 ):
     """刷新 Access Token"""
     try:
-        access_token = await refresh_access_token(request.refresh_token, db)
-        return TokenResponse(access_token=access_token, refresh_token=request.refresh_token)
+        return TokenResponse(**(await refresh_access_token(request.refresh_token, db)))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 

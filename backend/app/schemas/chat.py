@@ -3,13 +3,19 @@
 """
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import List
+from typing import List, Literal
 
 
 class ChatRequest(BaseModel):
     """发送消息请求"""
     conversation_id: str | None = Field(None, description="会话 ID（新会话则为空）")
     message: str = Field(..., min_length=1, max_length=5000, description="用户消息")
+
+
+class ChatHistoryMessage(BaseModel):
+    """传递给模型的单条会话历史。"""
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class SourceDocument(BaseModel):
@@ -19,6 +25,7 @@ class SourceDocument(BaseModel):
     chunk_id: str
     content_snippet: str
     score: float
+    citation_index: int
 
 
 class MessageResponse(BaseModel):

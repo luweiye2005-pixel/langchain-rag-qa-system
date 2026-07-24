@@ -2,7 +2,7 @@
 应用配置管理
 使用 pydantic-settings 从环境变量加载配置
 """
-from pydantic import Field, AliasChoices
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from typing import List
 import os
@@ -14,23 +14,12 @@ class Settings(BaseSettings):
     # ===== Database =====
     DATABASE_URL: str = ""
 
-    # ===== LLM (DeepSeek 优先，本地 Ollama 回退) =====
-    DEEPSEEK_API_KEY: str = Field(
-        default="",
-        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
-    )
-    DEEPSEEK_MODEL: str = "deepseek-chat"
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-
-    # 通义千问（备用，可选配置）
-    TONGYI_API_KEY: str = Field(
-        default="",
-        validation_alias=AliasChoices("TONGYI_API_KEY", "OPENAI_API_KEY"),
-    )
+    # ===== LLM (通义千问) =====
+    # 填入阿里云百炼 API Key；名称与统一部署环境变量保持一致。
+    OPENAI_API_KEY: str = Field(default="")
     TONGYI_MODEL: str = "qwen-max"
 
-    # Ollama 本地模型（无 API 时的回退方案）
-    OLLAMA_LLM_MODEL: str = "qwen3:4b"
+    # Ollama 服务仅用于本地 Embedding
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # ===== Embedding (Ollama) =====
@@ -41,6 +30,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    INITIAL_ADMIN_USERNAME: str = ""
+    INITIAL_ADMIN_EMAIL: str = ""
+    INITIAL_ADMIN_PASSWORD: str = ""
 
     # ===== Redis =====
     REDIS_URL: str = "redis://localhost:6379/0"

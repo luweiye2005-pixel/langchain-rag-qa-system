@@ -28,7 +28,7 @@ langchain-community>=0.3.0
 langchain-chroma>=0.1.0
 langchain-text-splitters>=0.3.0
 
-# LLM - 通义千问
+# LLM - 通义千问（ChatTongyi 由 langchain-community 提供）
 dashscope>=1.20.0
 
 # Embedding

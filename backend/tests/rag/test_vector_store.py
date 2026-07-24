@@ -81,3 +81,32 @@ class TestAddDocumentsToStore:
             mock_store.add_documents.assert_called_once_with(
                 documents=docs, metadatas=metadatas, ids=ids
             )
+
+
+class TestReplaceDocumentTexts:
+    """文档 revision 向量替换测试"""
+
+    def test_replaces_old_document_vectors_before_adding(self):
+        """重处理先清除旧 chunk，再写入新 chunk。"""
+        with patch("app.rag.vector_store.Chroma") as mock_chroma:
+            mock_store = MagicMock()
+            mock_chroma.return_value = mock_store
+            from app.rag.vector_store import reset_vector_store, replace_document_texts
+
+            reset_vector_store()
+            replace_document_texts(
+                "doc-1",
+                ["新内容"],
+                [{"document_id": "doc-1"}],
+                ["doc-1_chunk_0"],
+                MagicMock(),
+            )
+
+            mock_store._collection.delete.assert_called_once_with(
+                where={"document_id": "doc-1"}
+            )
+            mock_store.add_texts.assert_called_once_with(
+                texts=["新内容"],
+                metadatas=[{"document_id": "doc-1"}],
+                ids=["doc-1_chunk_0"],
+            )

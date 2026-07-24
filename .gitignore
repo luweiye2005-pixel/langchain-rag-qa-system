@@ -40,6 +40,12 @@ Thumbs.db
 
 # Database
 *.db
+*.sqlite3
+
+# Test / cache
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Claude internal
 .claude/
