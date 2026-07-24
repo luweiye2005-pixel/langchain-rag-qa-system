@@ -19,7 +19,7 @@
 |------|------|
 | LLM | 通义千问 (Qwen-Max) |
 | ASR / TTS | DashScope Paraformer / CosyVoice |
-| Embedding | Ollama (bge-m3) |
+| Embedding | 通义百炼 text-embedding-v3（可选本地 Ollama） |
 | 后端 | Python FastAPI |
 | RAG 框架 | LangChain + Chroma |
 | 数据库 | PostgreSQL 16 / SQLite |
@@ -33,29 +33,25 @@
 
 - Python 3.12+
 - Node.js 20+
-- Ollama（用于本地 embedding）
+- 阿里云百炼 API Key（LLM + Embedding + 语音共用）
 - PostgreSQL 16 / Redis（可选，Docker 版本需要）
 
-### 1. 配置 Ollama Embedding
-
-```bash
-# 安装 Ollama (Windows: https://ollama.com/download/windows)
-ollama pull bge-m3
-```
-
-### 2. 配置环境变量
+### 1. 配置环境变量
 
 ```bash
 cp .env.example backend/.env
 # 编辑 backend/.env：填入通义千问 API Key 与至少 32 字符的 JWT_SECRET
 # OPENAI_API_KEY=sk-your-qwen-api-key
 # JWT_SECRET=<使用安全随机字符串>
+# Embedding 默认：EMBEDDING_PROVIDER=dashscope、EMBEDDING_MODEL=text-embedding-v3
 ```
 
 **获取 API Key**：访问 [阿里百炼平台](https://bailian.console.aliyun.com/) 注册并获取。
 本地默认使用 SQLite（`DATABASE_URL=sqlite+aiosqlite:///./rag.db`）。如需创建初始管理员，请显式填写 `INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_EMAIL` 和强密码 `INITIAL_ADMIN_PASSWORD`；项目不再创建 `admin / 123456`。
 
-### 3. 安装依赖
+> 若仍要用本地 Ollama Embedding：设置 `EMBEDDING_PROVIDER=ollama`、`EMBEDDING_MODEL=bge-m3`，并执行 `ollama pull bge-m3`。
+
+### 2. 安装依赖
 
 ```bash
 # 后端
@@ -68,7 +64,7 @@ cd frontend
 npm ci
 ```
 
-### 4. 启动服务
+### 3. 启动服务
 
 ```bash
 # 终端 1：启动后端
@@ -80,7 +76,7 @@ cd frontend
 npm run dev
 ```
 
-### 5. 访问系统
+### 4. 访问系统
 
 - 前端：http://localhost:5173
 - API 文档：http://localhost:8000/docs
@@ -126,8 +122,8 @@ LangChainRAG/
 
 ## 常见问题
 
-**Q: Ollama 连接失败？**
-确保 Ollama 正在运行：`ollama serve`，且已拉取模型：`ollama pull bge-m3`
+**Q: Embedding / 文档处理失败？**
+确认 `OPENAI_API_KEY` 有效，且账号已开通文本向量（如 `text-embedding-v3`）。更换 Embedding 模型后需重新处理已有文档（旧向量空间不兼容）。若改用本地：`EMBEDDING_PROVIDER=ollama` 并 `ollama pull bge-m3`。
 
 **Q: 通义千问 API 调用失败？**
 检查 `backend/.env` 中的 `OPENAI_API_KEY` 是否填写了阿里云百炼的 API Key

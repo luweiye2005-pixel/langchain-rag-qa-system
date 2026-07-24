@@ -75,10 +75,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     try {
-      // Try to get a fresh access token
-      const response = await apiClient.post('/auth/refresh', {
-        refresh_token: storedRefresh,
-      });
+      // Try to get a fresh access token (短超时，避免刷新页长时间转圈)
+      const response = await apiClient.post(
+        '/auth/refresh',
+        { refresh_token: storedRefresh },
+        { timeout: 8000 },
+      );
       const { access_token: accessToken, refresh_token: refreshToken } = response.data;
       sessionStorage.setItem('accessToken', accessToken);
       localStorage.setItem('refreshToken', refreshToken);

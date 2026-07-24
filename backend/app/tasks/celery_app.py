@@ -22,4 +22,14 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_soft_time_limit=600,  # 10 min soft limit
     task_time_limit=900,       # 15 min hard limit
+    # 本地无 Redis 时避免 delay()/连接长时间挂起拖垮 API 进程
+    broker_connection_timeout=2,
+    broker_connection_retry=False,
+    broker_connection_retry_on_startup=False,
+    redis_backend_health_check_interval=5,
+    broker_transport_options={
+        "socket_connect_timeout": 2,
+        "socket_timeout": 2,
+        "retry_on_timeout": False,
+    },
 )

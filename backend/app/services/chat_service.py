@@ -1,6 +1,7 @@
 """
 RAG 问答核心服务
 """
+import asyncio
 from typing import AsyncGenerator, Dict, List, Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.rag.llm import get_llm
@@ -59,11 +60,13 @@ class ChatService:
             {"type": "error", "message": "..."}
         """
         try:
-            # 1. 检索相关文档
+            # 1. 检索相关文档（同步 Embedding/Chroma，放到线程避免卡住事件循环）
             retrieved_docs = []
             try:
-                retrieved_docs = self.vector_store.similarity_search_with_score(
-                    question, k=TOP_K_RESULTS
+                retrieved_docs = await asyncio.to_thread(
+                    self.vector_store.similarity_search_with_score,
+                    question,
+                    TOP_K_RESULTS,
                 )
             except Exception as e:
                 logger.warning(f"Vector search failed: {e}, answering without knowledge base")

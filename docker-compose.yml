@@ -71,6 +71,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://raguser:ragpass@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/0
       REDIS_BROKER_URL: redis://redis:6379/1
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-dashscope}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
+      USE_CELERY: ${USE_CELERY:-true}
       OLLAMA_BASE_URL: http://ollama:11434
       CHROMA_PERSIST_DIR: /app/chroma_data
       UPLOAD_DIR: /app/uploads
@@ -87,8 +90,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
 
   # ===== Celery Worker =====
   celery:
@@ -104,15 +105,18 @@ services:
       DATABASE_URL: postgresql+asyncpg://raguser:ragpass@postgres:5432/ragdb
       REDIS_URL: redis://redis:6379/0
       REDIS_BROKER_URL: redis://redis:6379/1
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-dashscope}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-v3}
+      USE_CELERY: ${USE_CELERY:-true}
       OLLAMA_BASE_URL: http://ollama:11434
       CHROMA_PERSIST_DIR: /app/chroma_data
       UPLOAD_DIR: /app/uploads
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     command: sh -c "python -m alembic upgrade head && celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2"
     depends_on:
       - postgres
       - redis
-      - ollama
 
   # ===== Frontend (Nginx + React) =====
   frontend:

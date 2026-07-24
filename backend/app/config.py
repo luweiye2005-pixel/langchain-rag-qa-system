@@ -23,11 +23,19 @@ class Settings(BaseSettings):
     TTS_MODEL: str = "cosyvoice-v3-flash"
     TTS_VOICE: str = "longxiaochun_v3"
 
-    # Ollama 服务仅用于本地 Embedding
+    # Ollama：仅在 EMBEDDING_PROVIDER=ollama 时使用
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
-    # ===== Embedding (Ollama) =====
-    EMBEDDING_MODEL: str = "bge-m3"
+    # ===== Embedding =====
+    # dashscope（默认，通义文本向量）或 ollama（本地）
+    EMBEDDING_PROVIDER: str = "dashscope"
+    # 百炼常用：text-embedding-v3 / text-embedding-v2；Ollama 常用：bge-m3
+    EMBEDDING_MODEL: str = "text-embedding-v3"
+
+    # ===== Celery =====
+    # 本地默认关闭：无 Redis/Worker 时 Celery.delay 会阻塞并拖垮 API。
+    # Docker 部署且运行 celery worker 时设 USE_CELERY=true。
+    USE_CELERY: bool = False
 
     # ===== JWT =====
     JWT_SECRET: str = ""

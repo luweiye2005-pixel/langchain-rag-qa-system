@@ -13,7 +13,8 @@ def _get_engine_kwargs(db_url: str) -> dict:
     is_sqlite = "sqlite" in db_url.lower()
     kwargs = {"echo": False}
     if is_sqlite:
-        kwargs["connect_args"] = {"check_same_thread": False}
+        # timeout: 等待写锁的秒数；WAL 在连接建立后启用
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
     else:
         kwargs.update({
             "pool_size": 20, "max_overflow": 10,
@@ -30,6 +31,17 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+async def configure_sqlite() -> None:
+    """启用 SQLite WAL，降低文档后台线程与 API 的读写互锁。"""
+    if "sqlite" not in settings.DATABASE_URL.lower():
+        return
+    from sqlalchemy import text
+
+    async with async_engine.begin() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 class Base(DeclarativeBase):

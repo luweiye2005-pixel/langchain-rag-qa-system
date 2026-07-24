@@ -6,10 +6,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from app.config import settings
-from app.core.database import async_engine
+from app.core.database import async_engine, AsyncSessionLocal, configure_sqlite
 from app.core.redis import init_redis, close_redis
 from app.api.v1.router import api_router
 from app.services.auth_service import seed_admin_user
+from app.models.document import ensure_document_sqlite_schema
 from loguru import logger
 
 
@@ -25,6 +26,10 @@ async def lifespan(app: FastAPI):
     if len(settings.JWT_SECRET) < 32:
         raise RuntimeError("JWT_SECRET must be at least 32 characters")
 
+    await configure_sqlite()
+    async with AsyncSessionLocal() as db:
+        await ensure_document_sqlite_schema(db)
+
     # Initialize Redis
     await init_redis()
     from app.core.redis import redis_client
@@ -33,6 +38,9 @@ async def lifespan(app: FastAPI):
         logger.info("Redis connected")
     else:
         logger.warning("Redis unavailable; rate limiting falls back to in-process counters")
+
+    if settings.USE_CELERY and redis_client is None:
+        logger.warning("USE_CELERY=true but Redis is down; document tasks use in-process threads")
 
     # Create default admin user
     await seed_admin_user()

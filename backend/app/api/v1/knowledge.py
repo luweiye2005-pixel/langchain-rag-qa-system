@@ -1,6 +1,7 @@
 """
 知识库管理 API (管理员专用)
 """
+import asyncio
 import uuid
 import hashlib
 import threading
@@ -18,6 +19,7 @@ from app.models.document import Document, ensure_document_sqlite_schema
 from app.config import settings
 from app.schemas.knowledge import DocumentContentResponse, UpdateContentRequest
 from loguru import logger
+
 
 router = APIRouter()
 _document_file_lock = threading.RLock()
@@ -50,17 +52,53 @@ def _remove_document_file(file_path: str) -> None:
         path.parent.rmdir()
 
 
+def _remove_document_file_locked(file_path: str) -> None:
+    with _document_file_lock:
+        _remove_document_file(file_path)
+
+
 def _start_processing(document_id: str, revision: int) -> None:
-    """提交带 revision 的任务；Celery 不可用时在本进程线程中执行。"""
-    try:
-        from app.tasks.document_tasks import process_document
-        process_document.delay(document_id, revision)
-    except Exception as exc:
-        logger.warning(f"Celery unavailable, using thread fallback: {exc}")
+    """提交文档处理任务（默认本进程线程，避免 Celery/Redis 阻塞 API）。"""
+
+    def _run_in_thread() -> None:
         from app.tasks.document_tasks import run_process_in_thread
+        try:
+            run_process_in_thread(document_id, revision)
+        except Exception as exc:
+            logger.exception(
+                "Background document processing failed for {}: {}",
+                document_id,
+                exc,
+            )
+
+    if not settings.USE_CELERY:
         threading.Thread(
-            target=run_process_in_thread, args=(document_id, revision), daemon=True
+            target=_run_in_thread,
+            name=f"doc-process-{document_id[:8]}",
+            daemon=True,
         ).start()
+        return
+
+    from app.core.redis import redis_client
+
+    if redis_client is None:
+        logger.warning(
+            "USE_CELERY enabled but Redis unavailable; thread fallback for {}",
+            document_id,
+        )
+        threading.Thread(target=_run_in_thread, daemon=True).start()
+        return
+
+    def _enqueue_celery() -> None:
+        try:
+            from app.tasks.document_tasks import process_document
+            process_document.delay(document_id, revision)
+            logger.info("Queued Celery task for document {}", document_id)
+        except Exception as exc:
+            logger.warning("Celery enqueue failed, thread fallback: {}", exc)
+            _run_in_thread()
+
+    threading.Thread(target=_enqueue_celery, daemon=True).start()
 
 
 @router.get("/documents")
@@ -252,13 +290,12 @@ async def delete_document(
     # this process, preventing a task from restoring a just-deleted document.
     try:
         from app.rag.vector_store import delete_documents_from_store
-        delete_documents_from_store(document.id)
+        await asyncio.to_thread(delete_documents_from_store, document.id)
     except Exception as e:
         logger.warning(f"Failed to delete vectors for document {document_id}: {e}")
 
     try:
-        with _document_file_lock:
-            _remove_document_file(document.file_path)
+        await asyncio.to_thread(_remove_document_file_locked, document.file_path)
     except ValueError:
         logger.error(f"Refusing to delete unmanaged path for document {document_id}")
     except Exception as e:
@@ -419,9 +456,9 @@ async def update_document_content(
                 temp_path = Path(tmp.name)
             os.replace(temp_path, file_path)
 
-        # 删除旧向量；向量存储内部持有进程内写锁。
+        # 删除旧向量；向量存储内部持有进程内写锁，放到线程避免卡住事件循环。
         from app.rag.vector_store import delete_documents_from_store, reset_vector_store
-        delete_documents_from_store(document.id)
+        await asyncio.to_thread(delete_documents_from_store, document.id)
         reset_vector_store()
     except Exception as e:
         logger.error(f"Failed to update document {document_id}: {e}")

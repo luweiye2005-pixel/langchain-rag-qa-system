@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
+_schema_ready = False
+
 
 class Document(Base):
     __tablename__ = "documents"
@@ -60,8 +62,15 @@ class Document(Base):
 
 
 async def ensure_document_sqlite_schema(db: AsyncSession) -> None:
-    """补齐旧 SQLite 数据库的文档一致性字段（新库由 metadata 直接创建）。"""
+    """补齐旧 SQLite 数据库的文档一致性字段（新库由 metadata 直接创建）。
+
+    进程内只执行一次，避免每个列表请求都 COMMIT 加剧锁竞争。
+    """
+    global _schema_ready
+    if _schema_ready:
+        return
     if db.bind is None or db.bind.dialect.name != "sqlite":
+        _schema_ready = True
         return
 
     columns = {
@@ -79,3 +88,4 @@ async def ensure_document_sqlite_schema(db: AsyncSession) -> None:
         )
     )
     await db.commit()
+    _schema_ready = True

@@ -16,8 +16,8 @@ export default function KnowledgePage() {
   const [contentModalOpen, setContentModalOpen] = useState(false);
   const [contentModalDoc, setContentModalDoc] = useState<DocumentInfo | null>(null);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const [docsResult, statsResult] = await Promise.allSettled([
         knowledgeAPI.getDocuments({ size: 100 }),
@@ -26,17 +26,17 @@ export default function KnowledgePage() {
 
       if (docsResult.status === 'fulfilled') {
         setDocuments(docsResult.value.documents);
-      } else {
+      } else if (!opts?.silent) {
         message.error('获取文档列表失败');
       }
 
       if (statsResult.status === 'fulfilled') {
         setStats(statsResult.value);
-      } else {
+      } else if (!opts?.silent) {
         message.error('获取知识库统计失败');
       }
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, []);
 
@@ -44,20 +44,36 @@ export default function KnowledgePage() {
     fetchData();
   }, [fetchData]);
 
+  // 处理中的文档自动静默轮询；跳过重叠请求，避免把页面拖进排队卡死
+  useEffect(() => {
+    const hasProcessing = documents.some(
+      (d) => d.status === 'pending' || d.status === 'processing',
+    );
+    if (!hasProcessing) return;
+    let inFlight = false;
+    const timer = window.setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      void fetchData({ silent: true }).finally(() => {
+        inFlight = false;
+      });
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [documents, fetchData]);
+
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
       await knowledgeAPI.upload(file);
       message.success(`"${file.name}" 上传成功，正在处理中`);
-      // Poll for updates
-      setTimeout(fetchData, 2000);
+      await fetchData({ silent: true });
     } catch (err: any) {
       const detail = err?.response?.data?.detail || '上传失败';
       message.error(detail);
     } finally {
       setUploading(false);
     }
-    return false; // Prevent default upload behavior
+    return false;
   };
 
   const handleDelete = async (id: string) => {
@@ -73,8 +89,8 @@ export default function KnowledgePage() {
   const handleReprocess = async (id: string) => {
     try {
       await knowledgeAPI.reprocess(id);
-      message.success('已重新处理');
-      fetchData();
+      message.success('已重新加入处理队列');
+      await fetchData({ silent: true });
     } catch {
       message.error('重新处理失败');
     }
