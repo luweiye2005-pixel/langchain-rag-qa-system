@@ -6,6 +6,7 @@
 
 - 🔐 **用户认证**：注册、登录、JWT 鉴权、密码修改
 - 💬 **知识库问答**：基于 RAG 架构，回答精准引用知识库来源
+- 🎙️ **语音问答**：麦克风语音输入（ASR）+ 助手回复播报（TTS）
 - 📚 **知识库管理**：支持 PDF/TXT/CSV/MD/DOCX 文档上传与管理
 - 🔄 **多用户多会话**：每个用户独立会话，历史记录永久保存
 - ⚡ **流式响应**：SSE 实时打字机效果
@@ -17,6 +18,7 @@
 | 层级 | 技术 |
 |------|------|
 | LLM | 通义千问 (Qwen-Max) |
+| ASR / TTS | DashScope Paraformer / CosyVoice |
 | Embedding | Ollama (bge-m3) |
 | 后端 | Python FastAPI |
 | RAG 框架 | LangChain + Chroma |
@@ -129,6 +131,9 @@ LangChainRAG/
 
 **Q: 通义千问 API 调用失败？**
 检查 `backend/.env` 中的 `OPENAI_API_KEY` 是否填写了阿里云百炼的 API Key
+
+**Q: 语音输入/播报不可用？**
+确认 DashScope 账号已开通语音识别（Paraformer）与 CosyVoice；浏览器需允许麦克风权限（推荐 Chrome / Edge）。可在聊天页开启「语音播报」并选择音色。
 
 **Q: 没有 PostgreSQL？**
 本地开发默认使用 SQLite，无需安装 PostgreSQL。Docker 部署会自动启动 PostgreSQL；已有旧数据库首次启用迁移时，确认 schema 已同步后执行 `python -m alembic stamp head`，新数据库执行 `python -m alembic upgrade head`。

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = Field(default="")
     TONGYI_MODEL: str = "qwen-max"
 
+    # ===== Voice (DashScope ASR / CosyVoice TTS) =====
+    TTS_MODEL: str = "cosyvoice-v3-flash"
+    TTS_VOICE: str = "longxiaochun_v3"
+
     # Ollama 服务仅用于本地 Embedding
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
